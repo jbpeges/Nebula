@@ -1,4 +1,4 @@
-import * as pdfjsLib from '/vendor/pdf.mjs';
+import * as pdfjsLib from '/pdf.mjs';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js';
@@ -16,10 +16,10 @@ const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
 const teacherEmails = new Set(['jpege@antonibrusi.cat','mlcastellano@antonibrusi.cat']);
 const DEFAULT_MISSIONS = [
- {id:'signal',order:1,active:true,title:'Desxifrar el senyal',icon:'⌁',story:'Una transmissió desconeguda arriba a la nau. Una micro:bit envia el senyal i una altra l’ha de rebre i interpretar.',objective:'Configurar dues micro:bits amb el mateix grup de ràdio, enviar un missatge codificat i desxifrar-lo.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/missions/signal.pdf',pageCount:7,steps:[]},
- {id:'light',order:2,active:true,title:'Seguir la llum',icon:'◉',story:'Els exploradors detecten una font d’energia amagada. Només es pot localitzar observant com canvia la llum.',objective:'Llegir el nivell de llum de la micro:bit i prendre una decisió amb una condició.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/missions/light.pdf',pageCount:7,steps:[]},
- {id:'rocks',order:3,active:true,title:'Travessar el camp de roques',icon:'⬡',story:'El Cutebot ha de creuar una zona plena de roques sense rebre cap impacte.',objective:'Mesurar la distància amb l’ultrasònic i fer que el Cutebot eviti els obstacles.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/missions/rocks.pdf',pageCount:7,steps:[]},
- {id:'base',order:4,active:true,title:'Arribar a la base',icon:'⇥',story:'Una línia lluminosa marca l’únic camí segur fins a la base alienígena.',objective:'Programar els sensors del Cutebot perquè segueixi una línia de manera autònoma.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/missions/base.pdf',pageCount:7,steps:[]}
+ {id:'signal',order:1,active:true,title:'Desxifrar el senyal',icon:'⌁',story:'Una transmissió desconeguda arriba a la nau. Una micro:bit envia el senyal i una altra l’ha de rebre i interpretar.',objective:'Configurar dues micro:bits amb el mateix grup de ràdio, enviar un missatge codificat i desxifrar-lo.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/signal.pdf',pageCount:7,steps:[]},
+ {id:'light',order:2,active:true,title:'Seguir la llum',icon:'◉',story:'Els exploradors detecten una font d’energia amagada. Només es pot localitzar observant com canvia la llum.',objective:'Llegir el nivell de llum de la micro:bit i prendre una decisió amb una condició.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/light.pdf',pageCount:7,steps:[]},
+ {id:'rocks',order:3,active:true,title:'Travessar el camp de roques',icon:'⬡',story:'El Cutebot ha de creuar una zona plena de roques sense rebre cap impacte.',objective:'Mesurar la distància amb l’ultrasònic i fer que el Cutebot eviti els obstacles.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/rocks.pdf',pageCount:7,steps:[]},
+ {id:'base',order:4,active:true,title:'Arribar a la base',icon:'⇥',story:'Una línia lluminosa marca l’únic camí segur fins a la base alienígena.',objective:'Programar els sensors del Cutebot perquè segueixi una línia de manera autònoma.',makecodeUrl:'https://makecode.microbit.org/',pdfUrl:'/base.pdf',pageCount:7,steps:[]}
 ];
 async function teamEmail(name){
   const normalized=String(name||'').trim().toLocaleLowerCase('ca-ES').normalize('NFKC');
@@ -44,16 +44,16 @@ async function ensureStudentAuth(name,password){
 }
 async function teacherAuth(){ const result=await signInWithPopup(auth,new GoogleAuthProvider()); if(!teacherEmails.has(result.user.email||'')){ await signOut(auth); throw new Error('Aquest compte no està autoritzat com a docent.'); } return result.user; }
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
 const app = document.querySelector('#app');
 const toastEl = document.querySelector('#toast');
 const session = { config: null, team: JSON.parse(sessionStorage.getItem('nebula-team') || 'null'), teacherToken: sessionStorage.getItem('nebula-teacher') || '', mission: null, page: 1, pdf: null, teacherTab: 'missions', editing: null, validationPoll: null, celebrationOpen: false };
 const missionCinematics = {
-  signal: '/assets/cinematics/signal.mp4',
-  light: '/assets/cinematics/light.mp4',
-  rocks: '/assets/cinematics/rocks.mp4',
-  base: '/assets/cinematics/base.mp4'
+  signal: '/signal.mp4',
+  light: '/light.mp4',
+  rocks: '/rocks.mp4',
+  base: '/base.mp4'
 };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function toast(message) { toastEl.textContent = message; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2800); }
@@ -113,7 +113,7 @@ function showMissionCelebration(missionId) {
   const completedMission = session.config.missions.find(m => m.id === missionId);
   const completedIndex = session.config.missions.findIndex(m => m.id === missionId);
   const nextMission = session.config.missions[completedIndex + 1];
-  const cinematicUrl = missionCinematics[missionId] || (nextMission ? '' : '/assets/cinematics/final.mp4');
+  const cinematicUrl = missionCinematics[missionId] || (nextMission ? '' : '/final.mp4');
   session.celebrationOpen = true;
   const dialog = document.createElement('dialog');
   dialog.innerHTML = `<div class="dialog-body celebration"><div class="celebration-icon">✓</div><div class="eyebrow">Missió validada</div><h2>Bona feina!</h2><p>Heu superat <strong>${esc(completedMission?.title || 'la missió')}</strong>. ${nextMission ? 'La ruta cap a la missió següent ja està preparada.' : 'Heu completat tota l’expedició!'}</p></div><div class="dialog-actions"><button class="btn" id="watchCinematic">${cinematicUrl ? 'Veure la cinemàtica →' : nextMission ? 'Obrir la missió següent →' : 'Veure el progrés final'}</button></div>`;
@@ -162,7 +162,7 @@ function header() {
 }
 
 function introView() {
-  app.innerHTML = `<section class="film"><video id="introVideo" src="/assets/expedicio-nebula-intro.mp4" autoplay playsinline controls></video><div class="film-controls"><button class="btn secondary" id="skipFilm">Ometre</button><button class="btn" id="startMissions">Començar la missió →</button></div></section>`;
+  app.innerHTML = `<section class="film"><video id="introVideo" src="/expedicio-nebula-intro.mp4" autoplay playsinline controls></video><div class="film-controls"><button class="btn secondary" id="skipFilm">Ometre</button><button class="btn" id="startMissions">Començar la missió →</button></div></section>`;
   document.querySelector('#introVideo').addEventListener('ended', missionGrid, { once: true });
   document.querySelector('#skipFilm').onclick = missionGrid;
   document.querySelector('#startMissions').onclick = missionGrid;
