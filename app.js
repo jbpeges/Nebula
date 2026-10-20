@@ -158,7 +158,7 @@ async function loginTeam(event) {
 }
 
 function header() {
-  return `<header class="app-header"><div class="brand"><span class="logo-mark">N</span><span>EXPEDICIÓ NÈBULA</span></div><div class="team-box"><span class="team-name">${esc(session.team.name)}</span><button class="btn secondary" id="progressBtn">Progrés</button></div></header>`;
+  return `<header class="app-header"><div class="brand"><span class="logo-mark">N</span><span>EXPEDICIÓ NÈBULA</span></div><div class="team-box"><span class="team-name">${esc(session.team.name)}</span><button class="btn secondary" id="progressBtn">Progrés</button><button class="btn secondary" id="logoutTeam">Tancar sessió</button></div></header>`;
 }
 
 function introView() {
@@ -178,7 +178,22 @@ function missionGrid() {
   bindHeader(); document.querySelectorAll('[data-mission]').forEach(button => button.onclick = () => openMission(button.dataset.mission));
 }
 
-function bindHeader() { document.querySelector('#progressBtn')?.addEventListener('click', missionGrid); }
+async function logoutTeam() {
+  if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; }
+  session.team = null;
+  session.teacherToken = '';
+  session.mission = null;
+  session.pdf = null;
+  session.celebrationOpen = false;
+  sessionStorage.removeItem('nebula-team');
+  sessionStorage.removeItem('nebula-teacher');
+  try { await signOut(auth); } catch (error) { console.error('Error en tancar sessió', error); }
+  loginView();
+}
+function bindHeader() {
+  document.querySelector('#progressBtn')?.addEventListener('click', missionGrid);
+  document.querySelector('#logoutTeam')?.addEventListener('click', logoutTeam);
+}
 async function openMission(id) {
   session.mission = session.config.missions.find(m => m.id === id); session.page = Math.max(1, session.team.currentMission === id ? Number(session.team.currentPage || 1) : 1); session.pdf = null;
   await renderMission();
