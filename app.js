@@ -281,16 +281,27 @@ function pendingValidations(teams, missions) {
     .sort((a,b)=>String(a.validationRequest.requestedAt||'').localeCompare(String(b.validationRequest.requestedAt||'')));
 }
 function startTeacherNotifications(dashboard) {
+  if (!document.querySelector('#validationPulseStyle')) {
+    const style=document.createElement('style'); style.id='validationPulseStyle';
+    style.textContent=`@keyframes validationPulse {0%,100% {box-shadow:0 0 0 2px #ffb454,0 0 8px #ffb45444} 50% {box-shadow:0 0 0 4px #ffd780,0 0 26px #ffb454cc}} .validation-pending {animation:validationPulse 1.6s ease-in-out infinite;border-color:#ffb454!important} .validation-groups {color:#ffd780;font-weight:700;margin-top:8px} @media(prefers-reduced-motion:reduce){.validation-pending{animation:none;outline:3px solid #ffb454}}`;
+    document.head.append(style);
+  }
   const panel=document.querySelector('#validationRequests');
   const render=teams=>{
     if(!panel.isConnected) return;
     const pending=pendingValidations(teams,dashboard.missions);
-    panel.innerHTML=pending.length ? `<div class="panel" style="border:2px solid #ffb454;margin:16px 0"><h3>🔔 ${pending.length} ${pending.length===1 ? 'equip demana validació' : 'equips demanen validació'}</h3>${pending.map(team=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0"><div><strong>${esc(team.name)}</strong><div>${esc(dashboard.missions.find(m=>m.id===team.validationRequest.missionId)?.title)}</div></div><button class="btn" data-pending-validate="${esc(team.id)}|${esc(team.validationRequest.missionId)}">Validar missió</button></div>`).join('')}</div>` : '<p class="small" style="margin:16px 0">Cap petició de validació pendent.</p>';
+    panel.innerHTML=pending.length ? `<div class="panel" style="border:2px solid #ffb454;margin:16px 0"><h3>🔔 ${pending.length} ${pending.length===1 ? 'equip demana validació' : 'equips demanen validació'}</h3>${pending.map(team=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0"><div><strong>${esc(team.name)}</strong><div>${esc(dashboard.missions.find(m=>m.id===team.validationRequest.missionId)?.title)}</div></div><button class="btn validation-pending" data-pending-validate="${esc(team.id)}|${esc(team.validationRequest.missionId)}">Validar missió</button></div>`).join('')}</div>` : '<p class="small" style="margin:16px 0">Cap petició de validació pendent.</p>';
+    document.querySelectorAll('[data-admin-mission]').forEach(card=>{
+      const groups=pending.filter(t=>t.validationRequest.missionId===card.dataset.adminMission);
+      card.classList.toggle('validation-pending',groups.length>0);
+      const label=card.querySelector('.validation-groups');
+      label.textContent=groups.length ? `🔔 Demanen validació: ${groups.map(t=>t.name).join(', ')}` : '';
+    });
     const tab=document.querySelector('[data-tab="teams"]'); if(tab) tab.textContent=pending.length ? `Equips · 🔔 ${pending.length}` : 'Equips';
     document.querySelectorAll('[data-validate]').forEach(button=>{
       const [id,missionId]=button.dataset.validate.split('|');
       const waiting=pending.some(t=>t.id===id && t.validationRequest.missionId===missionId);
-      button.style.outline=waiting ? '2px solid #ffb454' : '';
+      button.classList.toggle('validation-pending',waiting);
       const title=dashboard.missions.find(m=>m.id===missionId)?.title||missionId;
       button.textContent=`${waiting ? '🔔 ' : button.disabled ? '✓ ' : ''}${title}${waiting ? ' · Demana validació' : ''}`;
     });
@@ -302,11 +313,26 @@ function startTeacherNotifications(dashboard) {
     catch(error){button.disabled=false;toast(error.message);}
   };
   render(dashboard.teams);
-  session.teacherUnsubscribe=onSnapshot(collection(db,'teams'),snapshot=>render(snapshot.docs.map(d=>({id:d.id,...d.data()}))),()=>{if(panel.isConnected) panel.innerHTML='<p class="error">No es poden actualitzar els avisos. Torneu a entrar al panell docent.</p>';});
+  let stopped=false, refreshing=false;
+  const refresh=async()=>{
+    if(stopped || refreshing || !panel.isConnected) return;
+    refreshing=true;
+    try {
+      const snapshot=await getDocs(collection(db,'teams'));
+      if(!stopped) render(snapshot.docs.map(d=>({id:d.id,...d.data()})));
+    } catch(error) {
+      if(!stopped && panel.isConnected) panel.innerHTML='<p class="error">No es poden actualitzar els avisos. Es tornarà a intentar automàticament.</p>';
+    } finally {refreshing=false;}
+  };
+  const unsubscribe=onSnapshot(collection(db,'teams'),snapshot=>{
+    if(!stopped) render(snapshot.docs.map(d=>({id:d.id,...d.data()})));
+  },()=>{refresh();});
+  const interval=setInterval(refresh,4000);
+  session.teacherUnsubscribe=()=>{stopped=true;unsubscribe();clearInterval(interval);};
 }
 
 function teacherContent(data) {
-  if (session.teacherTab === 'missions') return `<section class="teacher-grid">${data.missions.map((m, index) => `<article class="teacher-card mission-admin"><div class="order-buttons"><button data-move="${esc(m.id)}" data-direction="-1" ${index === 0 ? 'disabled' : ''}>↑</button><button data-move="${esc(m.id)}" data-direction="1" ${index === data.missions.length - 1 ? 'disabled' : ''}>↓</button></div><div><div class="status">${m.active ? 'Visible' : 'Oculta'}</div><h3>${esc(m.title)}</h3><div class="small">${m.pdf ? `PDF carregat · ${m.pageCount || '?'} pàgines` : `${m.steps?.length || 0} passos de text`}</div></div><div class="admin-actions"><button class="btn secondary" data-edit="${esc(m.id)}">Editar</button><button class="btn secondary" data-toggle="${esc(m.id)}" data-active="${m.active}">${m.active ? 'Ocultar' : 'Activar'}</button><button class="btn danger" data-delete="${esc(m.id)}">Eliminar</button></div></article>`).join('')}</section>`;
+  if (session.teacherTab === 'missions') return `<section class="teacher-grid">${data.missions.map((m, index) => `<article class="teacher-card mission-admin" data-admin-mission="${esc(m.id)}"><div class="order-buttons"><button data-move="${esc(m.id)}" data-direction="-1" ${index === 0 ? 'disabled' : ''}>↑</button><button data-move="${esc(m.id)}" data-direction="1" ${index === data.missions.length - 1 ? 'disabled' : ''}>↓</button></div><div><div class="status">${m.active ? 'Visible' : 'Oculta'}</div><h3>${esc(m.title)}</h3><div class="validation-groups"></div><div class="small">${m.pdf ? `PDF carregat · ${m.pageCount || '?'} pàgines` : `${m.steps?.length || 0} passos de text`}</div></div><div class="admin-actions"><button class="btn secondary" data-edit="${esc(m.id)}">Editar</button><button class="btn secondary" data-toggle="${esc(m.id)}" data-active="${m.active}">${m.active ? 'Ocultar' : 'Activar'}</button><button class="btn danger" data-delete="${esc(m.id)}">Eliminar</button></div></article>`).join('')}</section>`;
   if (session.teacherTab === 'teams') return data.teams.length ? `<section class="teacher-grid">${data.teams.map(team => `<article class="teacher-card"><div class="status">${team.completed.length} missions</div><h3>${esc(team.name)}</h3><p class="small">Última activitat: ${team.updatedAt ? new Date(team.updatedAt).toLocaleString('ca-ES') : '—'}</p><div class="progress-track"><span style="width:${data.missions.length ? team.completed.length / data.missions.length * 100 : 0}%"></span></div><h4>Validació</h4>${data.missions.filter(m => m.active).map(m => `<button class="btn ${team.completed.includes(m.id) ? 'secondary' : ''}" style="width:100%;margin:4px 0" data-validate="${team.id}|${m.id}" ${team.completed.includes(m.id) ? 'disabled' : ''}>${team.completed.includes(m.id) ? '✓ ' : ''}${esc(m.title)}</button>`).join('')}<button class="btn danger" style="width:100%;margin-top:12px" data-reset-team="${team.id}">Reiniciar equip</button><button class="btn danger" style="width:100%;margin-top:8px" data-delete-team="${esc(team.id)}" data-team-name="${esc(team.name)}">Eliminar grup</button></article>`).join('')}</section>` : '<div class="empty">Encara no hi ha cap equip registrat.</div>';
   return `<section class="teacher-card" style="max-width:600px"><h3>Accés docent protegit</h3><p class="muted">Només els comptes Google autoritzats de l'escola poden administrar l'expedició.</p></section>`;
 }
