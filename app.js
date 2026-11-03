@@ -1,7 +1,7 @@
 import * as pdfjsLib from '/pdf.mjs';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp, onSnapshot } from 'https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyB9Gy4Fb66CMy_hagReGHcKZ6JRJFq9n84',
@@ -48,7 +48,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
 const app = document.querySelector('#app');
 const toastEl = document.querySelector('#toast');
-const session = { config: null, team: JSON.parse(sessionStorage.getItem('nebula-team') || 'null'), teacherToken: sessionStorage.getItem('nebula-teacher') || '', mission: null, page: 1, pdf: null, teacherTab: 'missions', editing: null, validationPoll: null, celebrationOpen: false };
+const session = { config: null, team: JSON.parse(sessionStorage.getItem('nebula-team') || 'null'), teacherToken: sessionStorage.getItem('nebula-teacher') || '', mission: null, page: 1, pdf: null, teacherTab: 'missions', editing: null, validationPoll: null, celebrationOpen: false, teacherUnsubscribe: null };
 const missionCinematics = {
   signal: '/signal-narrat.mp4',
   light: '/light-narrat.mp4',
@@ -76,13 +76,25 @@ async function api(url, options = {}) {
   if(url==='/api/team/progress' && method==='POST'){
     await updateDoc(doc(db,'teams',body.teamId),{currentMission:body.missionId,currentPage:Math.max(1,Number(body.page||1)),updatedAt:new Date().toISOString()}); return {ok:true};
   }
+  if(url==='/api/team/request-validation' && method==='POST'){
+    if(!auth.currentUser || auth.currentUser.uid!==body.teamId) throw new Error('Cal iniciar sessió amb aquest equip.');
+    const mission=DEFAULT_MISSIONS.find(m=>m.id===body.missionId && m.active);
+    if(!mission) throw new Error('Missió no disponible.');
+    const ref=doc(db,'teams',body.teamId), snap=await getDoc(ref);
+    if(!snap.exists()) throw new Error('Equip no trobat.');
+    const team=snap.data(), index=DEFAULT_MISSIONS.findIndex(m=>m.id===mission.id);
+    if((team.completed||[]).includes(mission.id)) return {ok:true};
+    if(DEFAULT_MISSIONS.slice(0,index).some(m=>!(team.completed||[]).includes(m.id))) throw new Error('Aquesta missió encara està bloquejada.');
+    if(team.validationRequest?.missionId!==mission.id) await updateDoc(ref,{validationRequest:{missionId:mission.id,requestedAt:new Date().toISOString()},updatedAt:new Date().toISOString()});
+    return {ok:true};
+  }
   if(url==='/api/teacher/login' && method==='POST'){ const u=await teacherAuth(); session.teacherToken=u.email; return {token:u.email}; }
   const teacher=auth.currentUser; if(!teacher || !teacherEmails.has(teacher.email||'')) throw new Error('Cal iniciar sessió com a docent.');
   if(url==='/api/teacher/dashboard'){
     const snaps=await getDocs(collection(db,'teams')); return {missions:DEFAULT_MISSIONS,teams:snaps.docs.map(d=>({id:d.id,...d.data()}))};
   }
-  if(url==='/api/teacher/validate' && method==='POST'){ const ref=doc(db,'teams',body.teamId),snap=await getDoc(ref); if(!snap.exists()) throw new Error('Equip no trobat.'); const completed=snap.data().completed||[]; if(!completed.includes(body.missionId)) completed.push(body.missionId); await updateDoc(ref,{completed,updatedAt:new Date().toISOString()}); return {ok:true}; }
-  if(url==='/api/teacher/team/reset' && method==='POST'){ await updateDoc(doc(db,'teams',body.teamId),{completed:[],currentMission:null,currentPage:1,updatedAt:new Date().toISOString()}); return {ok:true}; }
+  if(url==='/api/teacher/validate' && method==='POST'){ const ref=doc(db,'teams',body.teamId),snap=await getDoc(ref); if(!snap.exists()) throw new Error('Equip no trobat.'); const completed=snap.data().completed||[]; if(!completed.includes(body.missionId)) completed.push(body.missionId); await updateDoc(ref,{completed,...(snap.data().validationRequest?.missionId===body.missionId ? {validationRequest:null} : {}),updatedAt:new Date().toISOString()}); return {ok:true}; }
+  if(url==='/api/teacher/team/reset' && method==='POST'){ await updateDoc(doc(db,'teams',body.teamId),{completed:[],validationRequest:null,currentMission:null,currentPage:1,updatedAt:new Date().toISOString()}); return {ok:true}; }
   if(url.startsWith('/api/teacher/team/') && method==='DELETE'){ await deleteDoc(doc(db,'teams',decodeURIComponent(url.split('/').pop()))); return {ok:true}; }
   if(url.startsWith('/api/teacher/mission')) throw new Error('L’edició de missions online s’activarà en una fase posterior.');
   if(url==='/api/teacher/pin') return {ok:true};
@@ -143,6 +155,7 @@ function showMissionCelebration(missionId) {
 }
 
 function loginView() {
+  stopTeacherNotifications();
   app.innerHTML = `<main class="screen login"><section class="login-shell"><div class="login-art"><div class="logo"><span class="logo-mark">N</span> AULA MAKER</div><h1>EXPEDICIÓ<br><span>NÈBULA</span></h1><p>Una aventura de programació, robòtica i descobriment. Cada equip avançarà pas a pas fins a arribar a la base.</p></div><form class="login-form" id="teamLogin"><div class="eyebrow">Identificació</div><h2>Prepareu l’expedició</h2><p class="muted">Escriviu el mateix nom i contrasenya per recuperar el progrés en qualsevol portàtil.</p><label class="field">Nom de l’equip<input name="name" required maxlength="48" autocomplete="username" placeholder="Exemple: Equip Orió"></label><label class="field">Contrasenya de l’equip<input name="password" type="password" minlength="6" maxlength="24" required autocomplete="current-password"></label><p class="error" id="loginError"></p><button class="btn">Entrar a la nau</button><button class="btn secondary" type="button" id="teacherAccess">Accés docent</button></form></section></main>`;
   document.querySelector('#teamLogin').onsubmit = loginTeam;
   document.querySelector('#teacherAccess').onclick = teacherLoginDialog;
@@ -201,9 +214,9 @@ async function openMission(id) {
 
 async function renderMission() {
   const m = session.mission; const total = m.pdfUrl ? Math.max(1, m.pageCount || 1) : Math.max(1, m.steps?.length || 1); session.page = Math.min(session.page, total);
-  app.innerHTML = `<section class="screen">${header()}<main class="main"><div class="mission-head"><div><div class="eyebrow">Missió ${String(m.order).padStart(2, '0')}</div><h1>${esc(m.title)}</h1><p class="brief">${esc(m.story)}</p></div><div class="progress-pill">Pas ${session.page} de ${total}</div></div><div class="objective"><strong>Objectiu</strong>${esc(m.objective)}</div><section class="pdf-stage"><div class="viewer"><div class="viewer-toolbar"><strong>Guia de la missió</strong><div class="page-nav"><button class="btn secondary" id="prevPage" ${session.page <= 1 ? 'disabled' : ''}>←</button><span>${session.page} / ${total}</span><button class="btn secondary" id="nextPage" ${session.page >= total ? 'disabled' : ''}>→</button></div></div><div class="pdf-canvas-wrap" id="pageContent">${m.pdfUrl ? '<div class="loader"></div>' : `<article class="text-step"><div class="step-no">PAS ${session.page}</div><p>${esc(m.steps?.[session.page - 1] || 'Seguiu les indicacions del mestre.')}</p></article>`}</div></div><aside class="side-stack"><div class="panel"><h3>Progrés</h3><div class="progress-track"><span style="width:${session.page / total * 100}%"></span></div><p class="small">Completeu un pas abans d’avançar al següent.</p></div><div class="panel"><h3>Programa</h3><p class="small">Obriu MakeCode en una pestanya nova.</p><a class="btn" href="${esc(m.makecodeUrl || 'https://makecode.microbit.org/')}" target="_blank" rel="noopener">Obrir MakeCode ↗</a></div><div class="panel"><h3>Final de la missió</h3><p class="small">Quan tot funcioni, demaneu al mestre que validi el resultat des del seu panell.</p>${session.team.completed.includes(m.id) ? '<div class="complete-banner">Missió validada ✓</div>' : '<button class="btn secondary" id="requestValidation">Avisar el mestre</button>'}</div></aside></section></main></section>`;
+  app.innerHTML = `<section class="screen">${header()}<main class="main"><div class="mission-head"><div><div class="eyebrow">Missió ${String(m.order).padStart(2, '0')}</div><h1>${esc(m.title)}</h1><p class="brief">${esc(m.story)}</p></div><div class="progress-pill">Pas ${session.page} de ${total}</div></div><div class="objective"><strong>Objectiu</strong>${esc(m.objective)}</div><section class="pdf-stage"><div class="viewer"><div class="viewer-toolbar"><strong>Guia de la missió</strong><div class="page-nav"><button class="btn secondary" id="prevPage" ${session.page <= 1 ? 'disabled' : ''}>←</button><span>${session.page} / ${total}</span><button class="btn secondary" id="nextPage" ${session.page >= total ? 'disabled' : ''}>→</button></div></div><div class="pdf-canvas-wrap" id="pageContent">${m.pdfUrl ? '<div class="loader"></div>' : `<article class="text-step"><div class="step-no">PAS ${session.page}</div><p>${esc(m.steps?.[session.page - 1] || 'Seguiu les indicacions del mestre.')}</p></article>`}</div></div><aside class="side-stack"><div class="panel"><h3>Progrés</h3><div class="progress-track"><span style="width:${session.page / total * 100}%"></span></div><p class="small">Completeu un pas abans d’avançar al següent.</p></div><div class="panel"><h3>Programa</h3><p class="small">Obriu MakeCode en una pestanya nova.</p><a class="btn" href="${esc(m.makecodeUrl || 'https://makecode.microbit.org/')}" target="_blank" rel="noopener">Obrir MakeCode ↗</a></div><div class="panel"><h3>Final de la missió</h3><p class="small">Quan tot funcioni, demaneu al mestre que validi el resultat des del seu panell.</p>${session.team.completed.includes(m.id) ? '<div class="complete-banner">Missió validada ✓</div>' : `<button class="btn secondary" id="requestValidation" ${session.team.validationRequest?.missionId===m.id ? 'disabled' : ''}>${session.team.validationRequest?.missionId===m.id ? 'Petició enviada · Esperant el mestre' : 'Avisar el mestre'}</button>`}</div></aside></section></main></section>`;
   bindHeader(); document.querySelector('#prevPage').onclick = () => changePage(-1); document.querySelector('#nextPage').onclick = () => changePage(1);
-  document.querySelector('#requestValidation')?.addEventListener('click', () => toast('El mestre ja pot validar la missió des del seu panell.'));
+  document.querySelector('#requestValidation')?.addEventListener('click', async (event) => { const button=event.currentTarget; button.disabled=true; try { await api('/api/team/request-validation',{method:'POST',body:JSON.stringify({teamId:session.team.id,missionId:m.id})}); session.team.validationRequest={missionId:m.id}; saveTeamSession(); button.textContent='Petició enviada · Esperant el mestre'; toast('Hem avisat el mestre.'); } catch(error) { button.disabled=false; toast(error.message); } });
   if (m.pdfUrl) await drawPdfPage();
 }
 
@@ -235,11 +248,12 @@ function teacherLoginDialog() {
 }
 
 async function teacherView() {
+  stopTeacherNotifications();
   if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; }
   let dashboard;
   try { dashboard = await api('/api/teacher/dashboard'); } catch { session.teacherToken = ''; sessionStorage.removeItem('nebula-teacher'); return loginView(); }
-  app.innerHTML = `<section class="teacher"><header class="teacher-header"><div class="brand"><span class="logo-mark">N</span><span>PANELL DOCENT</span></div><button class="btn secondary" id="exitTeacher">Sortir</button></header><main class="teacher-main"><div class="topline"><div><div class="eyebrow">Control de l’expedició</div><h1>${session.teacherTab === 'missions' ? 'Missions' : session.teacherTab === 'teams' ? 'Equips' : 'Configuració'}</h1></div>${session.teacherTab === 'missions' ? '<button class="btn" id="newMission">+ Afegir missió</button>' : ''}</div><nav class="tabs"><button class="btn secondary tab ${session.teacherTab === 'missions' ? 'active' : ''}" data-tab="missions">Missions</button><button class="btn secondary tab ${session.teacherTab === 'teams' ? 'active' : ''}" data-tab="teams">Equips</button><button class="btn secondary tab ${session.teacherTab === 'settings' ? 'active' : ''}" data-tab="settings">Configuració</button></nav><div id="teacherContent">${teacherContent(dashboard)}</div></main></section>`;
-  document.querySelector('#exitTeacher').onclick = async () => { session.teacherToken = ''; session.team = null; sessionStorage.removeItem('nebula-teacher'); sessionStorage.removeItem('nebula-team'); await signOut(auth); if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; } loginView(); };
+  app.innerHTML = `<section class="teacher"><header class="teacher-header"><div class="brand"><span class="logo-mark">N</span><span>PANELL DOCENT</span></div><button class="btn secondary" id="exitTeacher">Sortir</button></header><main class="teacher-main"><div class="topline"><div><div class="eyebrow">Control de l’expedició</div><h1>${session.teacherTab === 'missions' ? 'Missions' : session.teacherTab === 'teams' ? 'Equips' : 'Configuració'}</h1></div>${session.teacherTab === 'missions' ? '<button class="btn" id="newMission">+ Afegir missió</button>' : ''}</div><section id="validationRequests" aria-live="polite" aria-label="Peticions de validació"></section><nav class="tabs"><button class="btn secondary tab ${session.teacherTab === 'missions' ? 'active' : ''}" data-tab="missions">Missions</button><button class="btn secondary tab ${session.teacherTab === 'teams' ? 'active' : ''}" data-tab="teams">Equips</button><button class="btn secondary tab ${session.teacherTab === 'settings' ? 'active' : ''}" data-tab="settings">Configuració</button></nav><div id="teacherContent">${teacherContent(dashboard)}</div></main></section>`;
+  document.querySelector('#exitTeacher').onclick = async () => { stopTeacherNotifications(); session.teacherToken = ''; session.team = null; sessionStorage.removeItem('nebula-teacher'); sessionStorage.removeItem('nebula-team'); await signOut(auth); if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; } loginView(); };
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { session.teacherTab = b.dataset.tab; teacherView(); });
   document.querySelector('#newMission')?.addEventListener('click', () => missionEditor(null));
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => missionEditor(dashboard.missions.find(m => m.id === b.dataset.edit)));
@@ -256,6 +270,39 @@ async function teacherView() {
     teacherView();
   });
   document.querySelector('#pinForm')?.addEventListener('submit', changePin);
+  startTeacherNotifications(dashboard);
+}
+
+function stopTeacherNotifications() {
+  session.teacherUnsubscribe?.(); session.teacherUnsubscribe=null;
+}
+function pendingValidations(teams, missions) {
+  return teams.filter(team=>team.validationRequest && missions.some(m=>m.id===team.validationRequest.missionId && m.active) && !(team.completed||[]).includes(team.validationRequest.missionId))
+    .sort((a,b)=>String(a.validationRequest.requestedAt||'').localeCompare(String(b.validationRequest.requestedAt||'')));
+}
+function startTeacherNotifications(dashboard) {
+  const panel=document.querySelector('#validationRequests');
+  const render=teams=>{
+    if(!panel.isConnected) return;
+    const pending=pendingValidations(teams,dashboard.missions);
+    panel.innerHTML=pending.length ? `<div class="panel" style="border:2px solid #ffb454;margin:16px 0"><h3>🔔 ${pending.length} ${pending.length===1 ? 'equip demana validació' : 'equips demanen validació'}</h3>${pending.map(team=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0"><div><strong>${esc(team.name)}</strong><div>${esc(dashboard.missions.find(m=>m.id===team.validationRequest.missionId)?.title)}</div></div><button class="btn" data-pending-validate="${esc(team.id)}|${esc(team.validationRequest.missionId)}">Validar missió</button></div>`).join('')}</div>` : '<p class="small" style="margin:16px 0">Cap petició de validació pendent.</p>';
+    const tab=document.querySelector('[data-tab="teams"]'); if(tab) tab.textContent=pending.length ? `Equips · 🔔 ${pending.length}` : 'Equips';
+    document.querySelectorAll('[data-validate]').forEach(button=>{
+      const [id,missionId]=button.dataset.validate.split('|');
+      const waiting=pending.some(t=>t.id===id && t.validationRequest.missionId===missionId);
+      button.style.outline=waiting ? '2px solid #ffb454' : '';
+      const title=dashboard.missions.find(m=>m.id===missionId)?.title||missionId;
+      button.textContent=`${waiting ? '🔔 ' : button.disabled ? '✓ ' : ''}${title}${waiting ? ' · Demana validació' : ''}`;
+    });
+  };
+  panel.onclick=async event=>{
+    const button=event.target.closest('[data-pending-validate]'); if(!button) return;
+    const [teamId,missionId]=button.dataset.pendingValidate.split('|'); button.disabled=true;
+    try { await api('/api/teacher/validate',{method:'POST',body:JSON.stringify({teamId,missionId})}); toast('Missió validada.'); await teacherView(); }
+    catch(error){button.disabled=false;toast(error.message);}
+  };
+  render(dashboard.teams);
+  session.teacherUnsubscribe=onSnapshot(collection(db,'teams'),snapshot=>render(snapshot.docs.map(d=>({id:d.id,...d.data()}))),()=>{if(panel.isConnected) panel.innerHTML='<p class="error">No es poden actualitzar els avisos. Torneu a entrar al panell docent.</p>';});
 }
 
 function teacherContent(data) {
