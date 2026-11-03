@@ -287,6 +287,32 @@ function pendingValidations(teams, missions) {
   return teams.filter(team=>team.validationRequest && missions.some(m=>m.id===team.validationRequest.missionId && m.active) && !(team.completed||[]).includes(team.validationRequest.missionId))
     .sort((a,b)=>String(a.validationRequest.requestedAt||'').localeCompare(String(b.validationRequest.requestedAt||'')));
 }
+function decodeFirestoreValue(value) {
+  if ('nullValue' in value) return null;
+  if ('stringValue' in value) return value.stringValue;
+  if ('booleanValue' in value) return value.booleanValue;
+  if ('integerValue' in value) return Number(value.integerValue);
+  if ('doubleValue' in value) return value.doubleValue;
+  if ('timestampValue' in value) return value.timestampValue;
+  if ('arrayValue' in value) return (value.arrayValue.values||[]).map(decodeFirestoreValue);
+  if ('mapValue' in value) return Object.fromEntries(Object.entries(value.mapValue.fields||{}).map(([key,v])=>[key,decodeFirestoreValue(v)]));
+  return null;
+}
+async function fetchTeacherTeams() {
+  await auth.authStateReady();
+  if(!auth.currentUser || !teacherEmails.has(auth.currentUser.email||'')) throw new Error('Cal tornar a iniciar sessió com a docent.');
+  const token=await auth.currentUser.getIdToken();
+  const teams=[];let pageToken='';
+  do {
+    const url=`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/teams?pageSize=100${pageToken ? '&pageToken='+encodeURIComponent(pageToken) : ''}`;
+    const response=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+    if(!response.ok) throw new Error(response.status===403 ? 'El compte docent no té permís per llegir els avisos.' : 'Connexió amb els avisos interrompuda.');
+    const data=await response.json();
+    teams.push(...(data.documents||[]).map(d=>({...Object.fromEntries(Object.entries(d.fields||{}).map(([k,v])=>[k,decodeFirestoreValue(v)])),id:d.name.split('/').pop()})));
+    pageToken=data.nextPageToken||'';
+  } while(pageToken);
+  return teams;
+}
 function startTeacherNotifications(dashboard) {
   if (!document.querySelector('#validationPulseStyle')) {
     const style=document.createElement('style'); style.id='validationPulseStyle';
@@ -330,22 +356,24 @@ function startTeacherNotifications(dashboard) {
     catch(error){button.disabled=false;toast(error.message);}
   };
   render(dashboard.teams);
+  const status=document.createElement('p'); status.className='small'; status.setAttribute('role','status'); panel.after(status);
   let stopped=false, refreshing=false;
   const refresh=async()=>{
     if(stopped || refreshing || !panel.isConnected) return;
     refreshing=true;
     try {
-      const snapshot=await getDocs(collection(db,'teams'));
-      if(!stopped) render(snapshot.docs.map(d=>({id:d.id,...d.data()})));
+      const teams=await fetchTeacherTeams();
+      if(!stopped) {render(teams);status.textContent='Avisos connectats · actualització automàtica';}
     } catch(error) {
-      if(!stopped && panel.isConnected) panel.innerHTML='<p class="error">No es poden actualitzar els avisos. Es tornarà a intentar automàticament.</p>';
+      if(!stopped && panel.isConnected) {console.error('Actualització dels avisos:',error);status.textContent=error.message+' Es tornarà a intentar automàticament.';}
     } finally {refreshing=false;}
   };
   const unsubscribe=onSnapshot(collection(db,'teams'),snapshot=>{
-    if(!stopped) render(snapshot.docs.map(d=>({id:d.id,...d.data()})));
+    if(!stopped) {render(snapshot.docs.map(d=>({id:d.id,...d.data()})));status.textContent='Avisos connectats · actualització automàtica';}
   },()=>{refresh();});
+  refresh();
   const interval=setInterval(refresh,4000);
-  session.teacherUnsubscribe=()=>{stopped=true;unsubscribe();clearInterval(interval);};
+  session.teacherUnsubscribe=()=>{stopped=true;unsubscribe();clearInterval(interval);status.remove();};
 }
 
 function teacherContent(data) {
