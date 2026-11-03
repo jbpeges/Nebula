@@ -50,10 +50,10 @@ const app = document.querySelector('#app');
 const toastEl = document.querySelector('#toast');
 const session = { config: null, team: JSON.parse(sessionStorage.getItem('nebula-team') || 'null'), teacherToken: sessionStorage.getItem('nebula-teacher') || '', mission: null, page: 1, pdf: null, teacherTab: 'missions', editing: null, validationPoll: null, celebrationOpen: false };
 const missionCinematics = {
-  signal: '/signal.mp4',
-  light: '/light.mp4',
-  rocks: '/rocks.mp4',
-  base: '/base.mp4'
+  signal: '/signal-narrat.mp4',
+  light: '/light-narrat.mp4',
+  rocks: '/rocks-narrat.mp4',
+  base: '/base-rescat-narrat.mp4'
 };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function toast(message) { toastEl.textContent = message; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2800); }
