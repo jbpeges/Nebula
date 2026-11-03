@@ -28,18 +28,17 @@ async function teamEmail(name){
   const hex=[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
   return `team-${hex.slice(0,40)}@nebula.local`;
 }
-async function ensureStudentAuth(name,password){
+async function ensureStudentAuth(name,password,create=false){
   const email=await teamEmail(name);
-  if(auth.currentUser && auth.currentUser.email===email) return auth.currentUser;
+  await auth.authStateReady();
   if(auth.currentUser) await signOut(auth);
-  try { return (await signInWithEmailAndPassword(auth,email,password)).user; }
-  catch(signInError){
-    try { return (await createUserWithEmailAndPassword(auth,email,password)).user; }
-    catch(createError){
-      if(createError?.code==='auth/email-already-in-use') throw new Error('La contrasenya d’aquest equip no és correcta.');
-      if(createError?.code==='auth/weak-password') throw new Error('La contrasenya ha de tenir com a mínim 6 caràcters.');
-      throw new Error('No s’ha pogut iniciar la sessió de l’equip. Comproveu el nom i la contrasenya.');
-    }
+  try {
+    return (await (create ? createUserWithEmailAndPassword(auth,email,password) : signInWithEmailAndPassword(auth,email,password))).user;
+  } catch(error) {
+    if(error?.code==='auth/email-already-in-use') throw new Error('Aquest equip ja existeix. Trieu «Iniciar sessió» per recuperar el progrés.');
+    if(error?.code==='auth/weak-password') throw new Error('La contrasenya ha de tenir com a mínim 6 caràcters.');
+    if(error?.code==='auth/too-many-requests') throw new Error('Hi ha hagut massa intents. Espereu uns minuts abans de tornar-ho a provar.');
+    throw new Error(create ? 'No s’ha pogut crear l’equip. Comproveu la connexió i torneu-ho a provar.' : 'No s’ha pogut entrar. Comproveu el nom i la contrasenya. Si és el primer cop, trieu «Crear un equip».');
   }
 }
 async function teacherAuth(){ const result=await signInWithPopup(auth,new GoogleAuthProvider()); if(!teacherEmails.has(result.user.email||'')){ await signOut(auth); throw new Error('Aquest compte no està autoritzat com a docent.'); } return result.user; }
@@ -61,11 +60,13 @@ async function api(url, options = {}) {
   const method=(options.method||'GET').toUpperCase();
   const body=options.body instanceof FormData ? options.body : (options.body ? JSON.parse(options.body) : {});
   if(url==='/api/state') return {title:'Expedició Nèbula',missions:DEFAULT_MISSIONS};
-  if(url==='/api/team/login' && method==='POST'){
+  if((url==='/api/team/login' || url==='/api/team/register') && method==='POST'){
     const name=String(body.name||'').trim(); const password=String(body.password||'');
     if(name.length<2 || password.length<6) throw new Error('Escriviu un nom d’equip i una contrasenya de 6 caràcters com a mínim.');
-    const user=await ensureStudentAuth(name,password);
+    const creating=url==='/api/team/register';
+    const user=await ensureStudentAuth(name,password,creating);
     const ref=doc(db,'teams',user.uid); const snap=await getDoc(ref);
+    if(!snap.exists() && !creating) throw new Error('No s’ha trobat el grup. Demaneu ajuda al docent.');
     if(!snap.exists()) await setDoc(ref,{ownerUid:user.uid,name,completed:[],currentMission:null,currentPage:1,updatedAt:new Date().toISOString()});
     else await updateDoc(ref,{name,updatedAt:new Date().toISOString()});
     return {team:{id:user.uid,...(await getDoc(ref)).data()}};
@@ -154,20 +155,25 @@ function showMissionCelebration(missionId) {
   dialog.addEventListener('close', () => { session.celebrationOpen = false; dialog.remove(); });
 }
 
-function loginView() {
+function loginView(create=false) {
   stopTeacherNotifications();
-  app.innerHTML = `<main class="screen login"><section class="login-shell"><div class="login-art"><div class="logo"><span class="logo-mark">N</span> AULA MAKER</div><h1>EXPEDICIÓ<br><span>NÈBULA</span></h1><p>Una aventura de programació, robòtica i descobriment. Cada equip avançarà pas a pas fins a arribar a la base.</p></div><form class="login-form" id="teamLogin"><div class="eyebrow">Identificació</div><h2>Prepareu l’expedició</h2><p class="muted">Escriviu el mateix nom i contrasenya per recuperar el progrés en qualsevol portàtil.</p><label class="field">Nom de l’equip<input name="name" required maxlength="48" autocomplete="username" placeholder="Exemple: Equip Orió"></label><label class="field">Contrasenya de l’equip<input name="password" type="password" minlength="6" maxlength="24" required autocomplete="current-password"></label><p class="error" id="loginError"></p><button class="btn">Entrar a la nau</button><button class="btn secondary" type="button" id="teacherAccess">Accés docent</button></form></section></main>`;
+  app.innerHTML = `<main class="screen login"><section class="login-shell"><div class="login-art"><div class="logo"><span class="logo-mark">N</span> AULA MAKER</div><h1>EXPEDICIÓ<br><span>NÈBULA</span></h1><p>Una aventura de programació, robòtica i descobriment. Cada equip avançarà pas a pas fins a arribar a la base.</p></div><form class="login-form" id="teamLogin"><div class="eyebrow">Identificació</div><div class="tabs"><button type="button" class="btn ${create ? 'secondary' : ''}" id="chooseLogin" aria-pressed="${!create}">Iniciar sessió</button><button type="button" class="btn ${create ? '' : 'secondary'}" id="chooseRegister" aria-pressed="${create}">Crear un equip</button></div><h2>${create ? 'Creeu el vostre equip' : 'Torneu a l’expedició'}</h2><p class="muted">${create ? 'Només el primer cop: trieu un nom únic i una contrasenya per al grup. Guardeu-los per tornar a entrar.' : 'Entreu amb el nom i la contrasenya del vostre equip per continuar el progrés.'}</p><input type="hidden" name="mode" value="${create ? 'register' : 'login'}"><label class="field">Nom de l’equip<input name="name" required maxlength="48" autocomplete="username" placeholder="Exemple: Equip Orió"></label><label class="field">Contrasenya de l’equip<input name="password" type="password" minlength="6" maxlength="24" required autocomplete="${create ? 'new-password' : 'current-password'}"></label>${create ? '<label class="field">Repetiu la contrasenya<input name="confirmPassword" type="password" required autocomplete="new-password"></label>' : ''}<p class="error" id="loginError"></p><button class="btn" type="submit">${create ? 'Crear equip i començar' : 'Iniciar sessió'}</button><button class="btn secondary" type="button" id="teacherAccess">Accés docent</button></form></section></main>`;
   document.querySelector('#teamLogin').onsubmit = loginTeam;
+  document.querySelector('#chooseLogin').onclick=()=>loginView(false);
+  document.querySelector('#chooseRegister').onclick=()=>loginView(true);
   document.querySelector('#teacherAccess').onclick = teacherLoginDialog;
 }
 
 async function loginTeam(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const submit=event.currentTarget.querySelector('[type="submit"]'); submit.disabled=true;
   try {
-    const data = await api('/api/team/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) });
+    const creating=form.get('mode')==='register';
+    if(creating && form.get('password')!==form.get('confirmPassword')) throw new Error('Les contrasenyes no coincideixen.');
+    const data = await api(creating ? '/api/team/register' : '/api/team/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) });
     session.team = data.team; saveTeamSession(); startTeamPolling(); introView();
-  } catch (error) { document.querySelector('#loginError').textContent = error.message; }
+  } catch (error) { document.querySelector('#loginError').textContent = error.message; submit.disabled=false; }
 }
 
 function header() {
@@ -252,7 +258,7 @@ async function teacherView() {
   if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; }
   let dashboard;
   try { dashboard = await api('/api/teacher/dashboard'); } catch { session.teacherToken = ''; sessionStorage.removeItem('nebula-teacher'); return loginView(); }
-  app.innerHTML = `<section class="teacher"><header class="teacher-header"><div class="brand"><span class="logo-mark">N</span><span>PANELL DOCENT</span></div><button class="btn secondary" id="exitTeacher">Sortir</button></header><main class="teacher-main"><div class="topline"><div><div class="eyebrow">Control de l’expedició</div><h1>${session.teacherTab === 'missions' ? 'Missions' : session.teacherTab === 'teams' ? 'Equips' : 'Configuració'}</h1></div>${session.teacherTab === 'missions' ? '<button class="btn" id="newMission">+ Afegir missió</button>' : ''}</div><section id="validationRequests" aria-live="polite" aria-label="Peticions de validació"></section><nav class="tabs"><button class="btn secondary tab ${session.teacherTab === 'missions' ? 'active' : ''}" data-tab="missions">Missions</button><button class="btn secondary tab ${session.teacherTab === 'teams' ? 'active' : ''}" data-tab="teams">Equips</button><button class="btn secondary tab ${session.teacherTab === 'settings' ? 'active' : ''}" data-tab="settings">Configuració</button></nav><div id="teacherContent">${teacherContent(dashboard)}</div></main></section>`;
+  app.innerHTML = `<section class="teacher"><header class="teacher-header"><div class="brand"><span class="logo-mark">N</span><span>PANELL DOCENT</span></div><button class="btn secondary" id="validationBell" type="button">🔔 Validacions · 0</button><button class="btn secondary" id="exitTeacher">Sortir</button></header><main class="teacher-main"><div class="topline"><div><div class="eyebrow">Control de l’expedició</div><h1>${session.teacherTab === 'missions' ? 'Missions' : session.teacherTab === 'teams' ? 'Equips' : 'Configuració'}</h1></div>${session.teacherTab === 'missions' ? '<button class="btn" id="newMission">+ Afegir missió</button>' : ''}</div><section id="validationRequests" aria-live="polite" aria-label="Peticions de validació"></section><nav class="tabs"><button class="btn secondary tab ${session.teacherTab === 'missions' ? 'active' : ''}" data-tab="missions">Missions</button><button class="btn secondary tab ${session.teacherTab === 'teams' ? 'active' : ''}" data-tab="teams">Equips</button><button class="btn secondary tab ${session.teacherTab === 'settings' ? 'active' : ''}" data-tab="settings">Configuració</button></nav><div id="teacherContent">${teacherContent(dashboard)}</div></main></section>`;
   document.querySelector('#exitTeacher').onclick = async () => { stopTeacherNotifications(); session.teacherToken = ''; session.team = null; sessionStorage.removeItem('nebula-teacher'); sessionStorage.removeItem('nebula-team'); await signOut(auth); if (session.validationPoll) { clearInterval(session.validationPoll); session.validationPoll = null; } loginView(); };
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { session.teacherTab = b.dataset.tab; teacherView(); });
   document.querySelector('#newMission')?.addEventListener('click', () => missionEditor(null));
@@ -283,13 +289,23 @@ function pendingValidations(teams, missions) {
 function startTeacherNotifications(dashboard) {
   if (!document.querySelector('#validationPulseStyle')) {
     const style=document.createElement('style'); style.id='validationPulseStyle';
-    style.textContent=`@keyframes validationPulse {0%,100% {box-shadow:0 0 0 2px #ffb454,0 0 8px #ffb45444} 50% {box-shadow:0 0 0 4px #ffd780,0 0 26px #ffb454cc}} .validation-pending {animation:validationPulse 1.6s ease-in-out infinite;border-color:#ffb454!important} .validation-groups {color:#ffd780;font-weight:700;margin-top:8px} @media(prefers-reduced-motion:reduce){.validation-pending{animation:none;outline:3px solid #ffb454}}`;
+    style.textContent=`.teacher-header{position:sticky;top:0;z-index:20;gap:12px;flex-wrap:wrap} #validationRequests{scroll-margin-top:110px} @keyframes validationPulse {0%,100% {box-shadow:0 0 0 2px #ffb454,0 0 8px #ffb45444} 50% {box-shadow:0 0 0 4px #ffd780,0 0 26px #ffb454cc}} .validation-pending {animation:validationPulse 1.6s ease-in-out infinite;border-color:#ffb454!important} .validation-groups {color:#ffd780;font-weight:700;margin-top:8px} @media(prefers-reduced-motion:reduce){.validation-pending{animation:none;outline:3px solid #ffb454}}`;
     document.head.append(style);
   }
   const panel=document.querySelector('#validationRequests');
+  const bell=document.querySelector('#validationBell');
+  bell.onclick=()=>panel.scrollIntoView({behavior:'smooth',block:'start'});
+  let known=new Set(), firstRender=true;
   const render=teams=>{
     if(!panel.isConnected) return;
     const pending=pendingValidations(teams,dashboard.missions);
+    const keys=new Set(pending.map(t=>`${t.id}|${t.validationRequest.missionId}|${t.validationRequest.requestedAt||''}`));
+    const fresh=pending.filter(t=>!known.has(`${t.id}|${t.validationRequest.missionId}|${t.validationRequest.requestedAt||''}`));
+    if(!firstRender && fresh.length) toast(`🔔 Demanen validació: ${fresh.map(t=>t.name).join(', ')}`);
+    known=keys;firstRender=false;
+    bell.textContent=`🔔 Validacions · ${pending.length}`;
+    bell.classList.toggle('validation-pending',pending.length>0);
+    document.title=pending.length ? `(${pending.length}) Validacions · Nèbula` : 'Expedició Nèbula';
     panel.innerHTML=pending.length ? `<div class="panel" style="border:2px solid #ffb454;margin:16px 0"><h3>🔔 ${pending.length} ${pending.length===1 ? 'equip demana validació' : 'equips demanen validació'}</h3>${pending.map(team=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0"><div><strong>${esc(team.name)}</strong><div>${esc(dashboard.missions.find(m=>m.id===team.validationRequest.missionId)?.title)}</div></div><button class="btn validation-pending" data-pending-validate="${esc(team.id)}|${esc(team.validationRequest.missionId)}">Validar missió</button></div>`).join('')}</div>` : '<p class="small" style="margin:16px 0">Cap petició de validació pendent.</p>';
     document.querySelectorAll('[data-admin-mission]').forEach(card=>{
       const groups=pending.filter(t=>t.validationRequest.missionId===card.dataset.adminMission);
@@ -356,6 +372,6 @@ async function saveMission(event, dialog) {
 }
 
 async function boot() {
-  try { await refreshConfig(); if (session.teacherToken) return teacherView(); if (session.team) { await refreshTeam(false); startTeamPolling(); return missionGrid(); } loginView(); } catch { app.innerHTML = '<main class="loading"><h2>No s’ha pogut connectar amb el servidor.</h2><p>Comproveu que la finestra del servidor continuï oberta.</p></main>'; }
+  try { await auth.authStateReady(); await refreshConfig(); if (session.teacherToken) return teacherView(); if (session.team) { await refreshTeam(false); startTeamPolling(); return missionGrid(); } loginView(); } catch { app.innerHTML = '<main class="loading"><h2>No s’ha pogut connectar amb el servidor.</h2><p>Comproveu que la finestra del servidor continuï oberta.</p></main>'; }
 }
 boot();
